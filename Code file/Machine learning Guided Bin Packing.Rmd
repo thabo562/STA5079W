@@ -1,0 +1,2267 @@
+---
+title: "Machine Learning Guided Online Bin packing "
+author: "DBXTHA030"
+date: "2025-01-05"
+output:
+  pdf_document: default
+  html_document: default
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library (dplyr)
+library(ggplot2)
+library(caret)
+library(nnet)
+library(e1071)
+library(RSNNS)
+library(tidyverse)
+library(gridExtra) 
+library(kableExtra)
+library(lattice)
+
+```
+
+```{r Data Organisation}
+#dataset creation using the metrics defined in the study by David Pisinger∗, Mikkel Sigurd 2005
+W<- 10 
+H<-10 
+n_items <- 20 
+n_bins<-5
+
+bins_df <- data.frame(
+  type   = 1:5,
+  width  = c(5, 5, 7, 10, 10),
+  height = c(5, 7, 9, 9, 10),
+  capacity= c(25, 35, 63, 90, 100)
+)
+
+bins_df$cost = round(100 * (1.2*(bins_df$width*bins_df$height) - 0.2*(W*H) )/ (W * H))#cost of. bins calculated as per literature 
+  
+  # Function to generate a single item of a given type and class 
+generate_item <- function(type, W, H) {
+  switch(as.character(type),
+         "1" = data.frame(
+           type = 1,
+           width = floor(runif(1, (2/3)*W, W+1)),
+           height = floor(runif(1, 1, (1/2)*H)+1),
+           Rotation = FALSE, Packed = FALSE,
+           assigned_bin = 0, red_cap = 0
+         ),
+         "2" = data.frame(
+           type = 2,
+           width = floor(runif(1, 1, (1/2)*W + 1)),
+           height = floor(runif(1, (2/3)*H, H + 1)),
+           Rotation = FALSE, Packed = FALSE,
+           assigned_bin = 0, red_cap = 0
+         ),
+         "3" = data.frame(
+           type = 3,
+           width = floor(runif(1, (1/2)*W, W + 1)),
+           height = floor(runif(1, (1/2)*H, H + 1)),
+           Rotation = FALSE, Packed = FALSE,
+           assigned_bin = 0, red_cap = 0
+         ),
+         "4" = data.frame(
+           type = 4,
+           width = floor(runif(1, 1, (1/2)*W + 1)),
+           height = floor(runif(1, 1, (1/2)*H + 1)),
+           Rotation = FALSE, Packed = FALSE,
+           assigned_bin = 0, red_cap = 0
+         ),
+         "5" = data.frame(
+           type = 5,
+           width = floor(runif(1, 1, W + 1)),
+           height = floor(runif(1, 1, H + 1)),
+           Rotation = FALSE, Packed = FALSE,
+           assigned_bin = 0, red_cap = 0
+         )
+  )
+}
+
+# Function to create a class dynamically each time it's called
+create_class <- function(n_items, W, H, probs) {
+  types <- sample(1:5, size = n_items, replace = TRUE, prob = probs)
+  items <- do.call(rbind, lapply(types, function(t) generate_item(t, W, H)))
+  return(items)
+}
+
+item_type1_20<-create_class(n_items = 20, W = 10, H = 10, probs = c(1, 0, 0, 0,0))
+item_type1_40<-create_class(n_items = 40, W = 10, H = 10, probs = c(1, 0, 0, 0,0))
+item_type1_80<-create_class(n_items = 80, W = 10, H = 10, probs = c(1, 0, 0, 0,0))
+item_type1_100<-create_class(n_items = 100, W = 10, H = 10, probs = c(1, 0, 0, 0,0))
+item_type1_150<-create_class(n_items = 150, W = 10, H = 10, probs = c(1, 0, 0, 0,0))
+item_type1_200<-create_class(n_items = 200, W = 10, H = 10, probs = c(1, 0, 0, 0,0))
+
+
+item_type2_20<-create_class(n_items = 20, W = 10, H = 10, probs = c(0, 1, 0, 0,0))
+item_type2_40<-create_class(n_items = 40, W = 10, H = 10, probs = c(0, 1, 0, 0,0))
+item_type2_80<-create_class(n_items = 80, W = 10, H = 10, probs = c(0, 1, 0, 0,0))
+item_type2_100<-create_class(n_items = 100, W = 10, H = 10, probs = c(0, 1, 0, 0,0))
+item_type2_150<-create_class(n_items = 150, W = 10, H = 10, probs = c(0, 1, 0, 0,0))
+item_type2_200<-create_class(n_items = 200, W = 10, H = 10, probs = c(0, 1, 0, 0,0))
+
+
+item_type3_20<-create_class(n_items = 20, W = 10, H = 10, probs = c(0, 0, 1, 0,0))
+item_type3_40<-create_class(n_items = 40, W = 10, H = 10, probs = c(0, 0, 1, 0,0))
+item_type3_80<-create_class(n_items = 80, W = 10, H = 10, probs = c(0, 0, 1, 0,0))
+item_type3_100<-create_class(n_items = 100, W = 10, H = 10, probs = c(0, 0, 1, 0,0))
+item_type3_150<-create_class(n_items = 150, W = 10, H = 10, probs = c(0, 0, 1, 0,0))
+item_type3_200<-create_class(n_items = 200, W = 10, H = 10, probs = c(0, 0, 1, 0,0))
+
+
+item_type4_20<-create_class(n_items = 20, W = 10, H = 10, probs = c(0, 0, 0, 1,0))
+item_type4_40<-create_class(n_items = 40, W = 10, H = 10, probs = c(0, 0, 0, 1,0))
+item_type4_80<-create_class(n_items = 80, W = 10, H = 10, probs = c(0, 0, 0, 1,0))
+item_type4_100<-create_class(n_items = 100, W = 10, H = 10, probs = c(0, 0, 0, 1,0))
+item_type4_150<-create_class(n_items = 150, W = 10, H = 10, probs = c(0, 0, 0, 1,0))
+item_type4_200<-create_class(n_items = 200, W = 10, H = 10, probs = c(0, 0, 0, 1,0))
+
+
+classI_20   <- create_class(n_items = 20, W = 10, H = 10, probs = c(0, 0, 0, 0,1))
+classI_40   <- create_class(n_items = 40, W = 10, H = 10, probs = c(0, 0, 0, 0,1))
+classI_80   <- create_class(n_items = 80, W = 10, H = 10, probs = c(0, 0, 0, 0,1))
+classI_100   <- create_class(n_items = 100, W = 10, H = 10, probs = c(0, 0, 0, 0,1))
+classI_150   <- create_class(n_items = 150, W = 10, H = 10, probs = c(0, 0, 0, 0,1))
+classI_200   <- create_class(n_items = 200, W = 10, H = 10, probs = c(0, 0, 0, 0,1))
+
+
+classII_20  <- create_class(n_items = 20, W = 10, H = 10, probs = c(0.7, 0.1, 0.1, 0.1,0))
+classII_40  <- create_class(n_items = 40, W = 10, H = 10, probs = c(0.7, 0.1, 0.1, 0.1,0))
+classII_80  <- create_class(n_items = 80, W = 10, H = 10, probs = c(0.7, 0.1, 0.1, 0.1,0))
+classII_100  <- create_class(n_items = 100, W = 10, H = 10, probs = c(0.7, 0.1, 0.1, 0.1,0))
+classII_150  <- create_class(n_items = 150, W = 10, H = 10, probs = c(0.7, 0.1, 0.1, 0.1,0))
+classII_200  <- create_class(n_items = 200, W = 10, H = 10, probs = c(0.7, 0.1, 0.1, 0.1,0))
+
+
+classIII_20 <- create_class(n_items = 20, W = 10, H = 10, probs = c(0.1, 0.7, 0.1, 0.1,0))
+classIII_40 <- create_class(n_items = 40, W = 10, H = 10, probs = c(0.1, 0.7, 0.1, 0.1,0))
+classIII_80 <- create_class(n_items = 80, W = 10, H = 10, probs = c(0.1, 0.7, 0.1, 0.1,0))
+classIII_100 <- create_class(n_items = 100, W = 10, H = 10, probs = c(0.1, 0.7, 0.1, 0.1,0))
+classIII_150 <- create_class(n_items = 150, W = 10, H = 10, probs = c(0.1, 0.7, 0.1, 0.1,0))
+classIII_200 <- create_class(n_items = 200, W = 10, H = 10, probs = c(0.1, 0.7, 0.1, 0.1,0))
+
+
+classIV_20  <- create_class(n_items = 20, W = 10, H = 10, probs = c(0.1, 0.1, 0.7, 0.1,0))
+classIV_40  <- create_class(n_items = 40, W = 10, H = 10, probs = c(0.1, 0.1, 0.7, 0.1,0))
+classIV_80  <- create_class(n_items = 80, W = 10, H = 10, probs = c(0.1, 0.1, 0.7, 0.1,0))
+classIV_100  <- create_class(n_items = 100, W = 10, H = 10, probs = c(0.1, 0.1, 0.7, 0.1,0))
+classIV_150  <- create_class(n_items = 150, W = 10, H = 10, probs = c(0.1, 0.1, 0.7, 0.1,0))
+classIV_200  <- create_class(n_items = 200, W = 10, H = 10, probs = c(0.1, 0.1, 0.7, 0.1,0))
+
+
+
+classV_20   <- create_class(n_items = 20, W = 10, H = 10, probs = c(0.1, 0.1, 0.1, 0.7,0))
+classV_40   <- create_class(n_items = 40, W = 10, H = 10, probs = c(0.1, 0.1, 0.1, 0.7,0))
+classV_80   <- create_class(n_items = 80, W = 10, H = 10, probs = c(0.1, 0.1, 0.1, 0.7,0))
+classV_100   <- create_class(n_items = 100, W = 10, H = 10, probs = c(0.1, 0.1, 0.1, 0.7,0))
+classV_150   <- create_class(n_items = 150, W = 10, H = 10, probs = c(0.1, 0.1, 0.1, 0.7,0))
+classV_200   <- create_class(n_items = 200, W = 10, H = 10, probs = c(0.1, 0.1, 0.1, 0.7,0))
+
+
+
+```
+
+```{r Bin Creation function}
+# Function to create a new bin space 
+
+create_bin2 <- function(bin_array) {
+  height <- bin_array[["height"]]
+  width  <- bin_array[["width"]]
+  
+  list(
+    type     = bin_array[["type"]],
+    height   = height,
+    width    = width,
+    capacity = height * width,
+    space    = matrix(0, nrow = height, ncol = width),
+    cost     = round(100 * (1.2*(width*height) - 0.2*(10*10) )/ (10 * 10))
+
+  )
+}
+
+```
+
+```{r Fit Check Function}
+
+# Function to check if an item fits in a bin at coordinates (x, y)
+
+fits <- function(bin,item, x, y){
+  if ( (item$width + x > bin$width+1) | (item$height + y > bin$height+1))
+    {
+    return(FALSE)
+    }
+  for (j in y:(y + item$height-1)) {
+   for (i in x:(x + item$width-1)){
+      if ( bin$space[j,i] > 0) #ensure no items are overlapping 
+        return(FALSE)
+    }
+  }
+  return(TRUE)
+}
+
+fits2 <- function(bin,item, x, y){
+  rotated_width<- item$height
+  rotated_height<-item$width
+  
+  if ( (rotated_width+ x > bin$width+1) | (rotated_height + y > bin$height+1))
+    {
+    return(FALSE)
+    }
+  for (j in y:(y + rotated_height-1)) {
+   for (i in x:(x + rotated_width-1)){
+      if ( bin$space[j,i] > 0) #ensure no items are overlapping 
+        return(FALSE)
+    }
+  }
+  return(TRUE)
+}
+
+```
+
+```{r Placement Function} 
+#First go through the end of the x values , then find the highest y value and return x to zero to start second level 
+
+# Function to place an item in a bin
+place_item <- function(bin, item) {
+  for (y in 1:(bin$height)) {
+    for (x in 1:(bin$width)) {
+      if (fits(bin,item, x, y)) 
+      {
+       bin$space[y + (0:(item$height-1)),x + (0:(item$width-1))] <-1
+       bin$items <- list(Id= item$Id,Type= item$type,Width= item$width, Height=item$height,Rotated= FALSE, Packed= TRUE)
+       return(bin)
+      }
+    }
+  }
+  for (y in 1:(bin$height)) {
+    for (x in 1:(bin$width)) {
+      if (fits2(bin,item, x, y) & item$Packed==FALSE) 
+      {
+       bin$space[y + (0:(item$width-1)),x + (0:(item$height-1))] <-1
+       bin$items<- list(Id= item$Id,Type= item$type,Width= item$width, Height=                                                            item$height,Rotated= TRUE, Packed= TRUE)
+       return(bin)
+      }
+    }
+  }
+  bin$items<- list(Id= item$Id,Type= item$type,Width= item$width, Height=item$height,Rotated= FALSE, Packed= FALSE)
+  return(bin)
+}
+
+```
+
+```{r Best Bin Function}
+
+best_bin<- function(bins,item) {
+  # Filter bins that can fit the item
+  subset_bins <- subset(bins, (height >= item$height & width >= item$width)|                                                                     (height >= item$width & width >= item$height))
+  
+  if (nrow(subset_bins) == 0) {
+    return(NA)  # No suitable bin found
+  }
+  
+  # Find the bin with the lowest cost
+  best_bin_index <- which.min(subset_bins$cost) #always open the bin with the lowest cost for the item being packed
+  
+  # Return the Type
+  return(subset_bins$type[best_bin_index])
+}
+
+```
+
+```{r Assigment Cost Functions}
+
+ac_func<- function(bins,items){
+
+assignment_cost<-matrix(0,nrow= nrow(items), ncol = length(bins))
+# Fill matrix based on heuristic
+for (i in 1:nrow(items)) {
+  item_area <- items$width * items$height
+  for (j in 1:length(bins)) {
+    a<- FALSE
+    b<-FALSE
+    height<-getElement(bins[[j]],"height")
+    width<-getElement(bins[[j]],"width")
+    bin_capacity <- width * height
+    for (m in 1:(height)) {
+    for (n in 1:(width)) {
+      if (fits(bins[[j]],items[i,],n,m))
+        {
+          a<-TRUE
+      }
+    }
+    }
+    for (m in 1:(height)) {
+    for (n in 1:(width)) {
+      if (fits2(bins[[j]],items[i,],n,m))
+        {
+          b<-TRUE
+      }
+    }
+    }
+    if(a|b){
+    # If item area equals bin capacity, set cost = 1
+      if (item_area > bin_capacity){
+        cost<-0
+      }
+       else if(item_area < bin_capacity){
+        ratio <- round((item_area / bin_capacity),2)
+        # Heuristic: Invert to favor matching sizes
+        cost <- ratio #round(ifelse(ratio < 0.5, 2 - ratio * 2, 1 / ratio),2)
+      }
+     else{
+        cost<-1
+     }
+      }
+    else{
+      cost<-0
+    }
+    assignment_cost[i, j] <- cost
+  }
+}
+
+
+return(assignment_cost)
+
+}
+
+
+ac_func2<- function(bins,items){
+  
+  assignment_cost<-matrix(0,nrow= nrow(items), ncol = length(bins))
+  for (i in 1:nrow(items)) {
+    item_area <- items$width * items$height
+    for (j in 1:length(bins)) {
+      a<- FALSE
+      b<-FALSE
+      height<-getElement(bins[[j]],"height")
+      width<-getElement(bins[[j]],"width")
+      bin_capacity <- width * height
+      for (m in 1:(height)) {
+        for (n in 1:(width)) {
+          if (fits(bins[[j]],items[i,],n,m))
+          {
+            a<-TRUE
+          }
+        }
+      }
+      for (m in 1:(height)) {
+        for (n in 1:(width)) {
+          if (fits2(bins[[j]],items[i,],n,m))
+          {
+            b<-TRUE
+          }
+        }
+      }
+      if(a|b){
+      assignment_cost[i, j] <- bins[[j]]$cost
+      }
+      else{
+        assignment_cost[i, j] <- 0
+      }
+        
+  }
+  }  
+  return(assignment_cost)
+}
+```
+
+```{r Lower Bound}
+best_bin_index<- function(bins, item) {
+  feasible <- c()
+  
+  for (i in seq_along(bins)) {
+    if ((bins[[i]]$height >= item$height && bins[[i]]$width >= item$width) ||
+        (bins[[i]]$height >= item$width  && bins[[i]]$width  >= item$height)) {
+      feasible <- c(feasible, i)
+    }
+  }
+  
+  if (length(feasible) == 0) {
+    return(NA_integer_)  # no suitable bin
+  }
+  
+  # choose cheapest feasible bin
+  costs <- sapply(feasible, function(i) bins[[i]]$cost)
+  best_index <- feasible[which.min(costs)]
+  return(best_index)
+}
+
+# IP area cover bound with bins as list
+ip_area_cover_bound <- function(items, bins) {
+  bin_usage <- rep(0, length(bins))  # fractional usage tracker
+  
+  for (i in 1:nrow(items)) {
+    item <- items[i, ]
+    
+    best_index <- best_bin_index(bins, item)
+    if (is.na(best_index)) {
+      stop(paste("Item", item$Id, "does not fit in any bin"))
+    }
+    
+    # fraction of bin area consumed
+    fraction <- (item$width * item$height) /
+      (bins[[best_index]]$width * bins[[best_index]]$height)
+    
+    bin_usage[best_index] <- bin_usage[best_index] + fraction
+  }
+  
+  # round up usage
+  rounded_usage <- ceiling(bin_usage)
+  
+  # total cost
+  total_cost <- sum(sapply(seq_along(bins), function(i) rounded_usage[i] * bins[[i]]$cost))
+  return(total_cost)
+}
+
+  new_bin_selection<-list()
+  for (i in 1: nrow(bins_df)){
+    new_bin_selection[[i]]<- create_bin2(bins_df[i,])
+  }
+```
+
+```{r Heuristic Algorithm 1}
+
+HS_1<- function(bins_matrix, item_type){
+  
+  new_bin_selection<-list()
+  for (i in 1: nrow(bins_matrix)){
+    new_bin_selection[[i]]<- create_bin2(bins_matrix[i,])
+  }
+  bin_space<- list()
+  start<-  Sys.time()
+  for (i in 1:nrow(item_type)) 
+  {
+    item_volume <- item_type$width[i] * item_type$height[i]
+    while (item_type$Packed[i] == FALSE){
+      best_ratio <- -Inf
+      best_bin_index <- NA
+      best_choice_index <- NA
+      assign_temp<- matrix()
+      ratio<- -Inf
+      solution<- list()
+      # Step 1: Evaluate all open bins
+      if (length(bin_space)>0){
+        for(j in 1:length(bin_space))
+        {
+          residual_capacity <- sum(bin_space[[j]]$space == 0)
+          assignment_cost<- ac_func(bin_space, item_type[i,])
+          a_ij <- assignment_cost[,j]
+          if (residual_capacity >= item_volume && a_ij!= 0) {
+            ratio <- a_ij / (residual_capacity-item_volume + 1e-10)#avoid divby 0
+            if (ratio > best_ratio) {
+              best_ratio=ratio
+              best_bin_index= j
+            }
+          }
+        }
+      }
+      # Step 2: If a valid bin was found, try to place the item there
+      if (!is.na(best_bin_index)) {
+        solution <- place_item(bin_space[[best_bin_index]], item_type[i,])
+        if(solution$items$Packed == TRUE) {
+          
+          item_type$Packed[i]=solution$items$Packed
+          item_type$Rotation[i]=solution$items$Rotated
+          item_type$assigned_bin[i] <- best_bin_index
+          item_type$red_cap[i]= sum(bin_space[[best_bin_index]]$space == 0)
+          bin_space[[best_bin_index]]$space<- bin_space[[best_bin_index]]$space + solution$space
+        }
+      }
+      # Step 3: If no suitable bin found, open a new one with lowest Assignment Cost
+      if (is.null(solution$items$Packed)) {
+        
+        lowest_ac <- -Inf
+        temp_cost<- -Inf
+        assign_temp<- ac_func(new_bin_selection,item_type[i,])
+        for (j in 1:length(new_bin_selection)){
+          temp_cost<- assign_temp[,j]
+          if(temp_cost>lowest_ac){
+            lowest_ac <- temp_cost
+            best_choice_index <- j
+          }
+        }
+      }
+      if (!is.na(best_choice_index)){
+        new_length<- length(bin_space) + 1
+        bin_space[[new_length]]<- create_bin2(bins_matrix[best_choice_index,])
+        solution <- place_item(bin_space[[new_length]],item_type[i,])
+        if (solution$items$Packed== TRUE) {
+          
+          item_type$Packed[i]=solution$items$Packed
+          item_type$Rotation[i]=solution$items$Rotated
+          item_type$assigned_bin[i] <- new_length
+          item_type$red_cap[i]= sum(bin_space[[new_length]]$space == 0)
+          bin_space[[new_length]]$space<- bin_space[[new_length]]$space + solution$space
+        }
+      }
+    }
+  }
+  finish<- Sys.time()
+  total<- finish- start
+  costs <- sapply(bin_space, function(bin) {return(bin$cost)})
+  obj <- sum(costs)
+  
+  return(list(all_bins= bin_space, all_items= item_type, time=total,distinct_bins=n_distinct(item_type$assigned_bin) ,obj= obj))}
+
+
+ a<-HS_1(bins_matrix = bins_df, item_type = item_type_1)
+
+
+```
+
+```{r Heuristic Algorithm 1 Online}
+
+HS1_OL<-function(bins_matrix, item_type){
+  
+  item_type <- item_type[order(item_type$height*item_type$width,decreasing = TRUE), ] # ordering so bigger items to go in first
+  rownames(item_type) <- NULL 
+
+  new_bin_selection<-list()
+  for (i in 1: nrow(bins_matrix)){
+    new_bin_selection[[i]]<- create_bin2(bins_matrix[i,])
+  }
+  bin_space<- list()
+  start<-  Sys.time()
+  for (i in 1:nrow(item_type)) 
+  {
+    item_volume <- item_type$width[i] * item_type$height[i]
+
+    while (item_type$Packed[i] == FALSE){
+      best_ratio <- -Inf
+      best_bin_index <- NA
+      best_choice_index <- NA
+      assign_temp<- matrix()
+      ratio<- -Inf
+      solution<- list()
+      # Step 1: Evaluate all open bins
+      if (length(bin_space)>0){
+        for(j in 1:length(bin_space))
+        {
+          residual_capacity <- sum(bin_space[[j]]$space == 0)
+          assignment_cost<- ac_func(bin_space, item_type[i,])
+
+          a_ij <- assignment_cost[,j]
+          if (residual_capacity >= item_volume && a_ij!= 0) {
+            ratio <- a_ij / (residual_capacity-item_volume + 1e-10)#avoid divby 0
+            #print(ratio)
+            if (ratio > best_ratio) {
+              best_ratio=ratio
+              best_bin_index= j
+            }
+          }
+        }
+      }
+      # Step 2: If a valid bin was found, try to place the item there
+      if (!is.na(best_bin_index)) {
+        solution <- place_item(bin_space[[best_bin_index]], item_type[i,])
+        if(solution$items$Packed == TRUE) {
+          
+          item_type$Packed[i]=solution$items$Packed
+          item_type$Rotation[i]=solution$items$Rotated
+          item_type$assigned_bin[i] <- best_bin_index
+          item_type$red_cap[i]= sum(bin_space[[best_bin_index]]$space == 0)
+          bin_space[[best_bin_index]]$space<- bin_space[[best_bin_index]]$space + solution$space
+        }
+
+      }
+      # Step 3: If no suitable bin found, open a new one with lowest Assignment Cost
+      if (is.null(solution$items$Packed)) {
+        
+        #print("came in here")
+        lowest_ac <- -Inf
+        temp_cost<- -Inf
+        assign_temp<- ac_func(new_bin_selection,item_type[i,])
+        #print(assign_temp)
+        for (j in 1:length(new_bin_selection)){
+          
+          temp_cost<- assign_temp[,j]
+          if(temp_cost>lowest_ac){
+            lowest_ac <- temp_cost
+            best_choice_index <- j
+          }
+        }
+      }
+      
+      if (!is.na(best_choice_index)){
+        new_length<- length(bin_space) + 1
+        bin_space[[new_length]]<- create_bin2(bins_matrix[best_choice_index,])
+        solution <- place_item(bin_space[[new_length]],item_type[i,])
+        if (solution$items$Packed== TRUE) {
+          
+          item_type$Packed[i]=solution$items$Packed
+          item_type$Rotation[i]=solution$items$Rotated
+          item_type$assigned_bin[i] <- new_length
+          item_type$red_cap[i]= sum(bin_space[[new_length]]$space == 0)
+          bin_space[[new_length]]$space<- bin_space[[new_length]]$space + solution$space
+
+        }
+      }
+    }
+  }
+  finish<- Sys.time()
+  total<- finish- start
+  costs <- sapply(bin_space, function(bin) {return(bin$cost)})
+  obj <- sum(costs)
+  
+  return(list(all_bins= bin_space, all_items= item_type, time=total,distinct_bins=n_distinct(item_type$assigned_bin) ,obj= obj))}
+```
+
+```{r Heuristic Algorithm 2}
+
+HS_2<- function(bins_matrix, item_type){
+  new_bin_selection<-list()
+  for (i in 1: nrow(bins_matrix)){
+    new_bin_selection[[i]]<- create_bin2(bins_matrix[i,])
+  }
+  
+  bin_space<- list()
+  start<-  Sys.time()
+  for (i in 1:nrow(item_type)) 
+  {
+    item_volume <- item_type$width[i] * item_type$height[i]
+    while (item_type$Packed[i] == FALSE){
+      best_ratio <- Inf
+      best_bin_index <- NA
+      best_choice_index <- NA
+      assign_temp<- matrix()
+      ratio<- Inf
+      solution<- list()
+      temp_cost<-0
+      # Step 1: Evaluate all open bins
+      if (length(bin_space)>0){
+        for(j in 1:length(bin_space))
+        {
+          residual_capacity <- sum(bin_space[[j]]$space == 0)
+          bin_cost<- ac_func2(bin_space,item_type[i,])
+          a_ij<- bin_cost[,j]
+          if (residual_capacity >= item_volume && a_ij!=0) {
+            ratio <- a_ij / (residual_capacity-item_volume + 1e-10)#avoid divby 0
+            if (ratio < best_ratio) {
+              best_ratio=ratio
+              best_bin_index= j
+            }
+          }
+        }
+      }
+      # Step 2: If a valid bin was found, try to place the item there
+      if (!is.na(best_bin_index)) {
+        solution <- place_item(bin_space[[best_bin_index]], item_type[i,])
+        if(solution$items$Packed == TRUE) {
+          item_type$Packed[i]=solution$items$Packed
+          item_type$Rotation[i]=solution$items$Rotated
+          item_type$red_cap[i]= sum(bin_space[[best_bin_index]]$space == 0)
+          item_type$assigned_bin[i] <- best_bin_index
+          bin_space[[best_bin_index]]$space<- bin_space[[best_bin_index]]$space + solution$space
+        }
+      }
+      if (is.null(solution$items$Packed)) {
+        
+        assign_temp<- ac_func2(new_bin_selection,item_type[i,])
+        temp_cost <- which(assign_temp == min(assign_temp[assign_temp != 0]))[1]
+        best_choice_index <- temp_cost
+        if (!is.na(temp_cost)){
+         new_length<- length(bin_space) + 1
+         bin_space[[new_length]]<- create_bin2(bins_matrix[temp_cost,])
+         solution <- place_item(bin_space[[new_length]],item_type[i,])
+        if (solution$items$Packed== TRUE) {
+          
+          item_type$Packed[i]=solution$items$Packed
+          item_type$Rotation[i]=solution$items$Rotated
+          item_type$red_cap[i]= sum(bin_space[[new_length]]$space == 0)
+          item_type$assigned_bin[i] <- new_length
+          bin_space[[new_length]]$space<- bin_space[[new_length]]$space + solution$space
+        }
+      }
+      }
+    }
+  }
+  finish<- Sys.time()
+  total<- finish- start
+  costs <- sapply(bin_space, function(bin) {return(bin$cost)})
+  obj <- sum(costs)
+  
+  return(list(all_bins= bin_space, all_items= item_type, time=total,distinct_bins=n_distinct(item_type$assigned_bin) ,obj= obj))}
+
+
+```
+
+```{r Heuristic Algorithm 2 Online}
+HS2_OL<- function(bins_matrix, item_type){
+  new_bin_selection<-list()
+  item_type <- item_type[order(item_type$height*item_type$width,decreasing = TRUE), ] # ordering so bigger items to go in first
+  rownames(item_type) <- NULL 
+  
+  for (i in 1: nrow(bins_matrix)){
+    new_bin_selection[[i]]<- create_bin2(bins_matrix[i,])
+  }
+  
+  bin_space<- list()
+  start<-  Sys.time()
+  for (i in 1:nrow(item_type)) 
+  {
+    item_volume <- item_type$width[i] * item_type$height[i]
+    #print(assignment_cost)
+    while (item_type$Packed[i] == FALSE){
+      best_ratio <- Inf
+      best_bin_index <- NA
+      best_choice_index <- NA
+      assign_temp<- matrix()
+      ratio<- Inf
+      solution<- list()
+      temp_cost<-0
+      # Step 1: Evaluate all open bins
+      if (length(bin_space)>0){
+        for(j in 1:length(bin_space))
+        {
+          residual_capacity <- sum(bin_space[[j]]$space == 0)
+          bin_cost<- ac_func2(bin_space,item_type[i,])
+          a_ij<- bin_cost[,j]
+          if (residual_capacity >= item_volume && a_ij!=0) {
+            ratio <- a_ij / (residual_capacity-item_volume + 1e-10)#avoid divby 0
+            #print(ratio)
+            if (ratio < best_ratio) {
+              best_ratio=ratio
+              best_bin_index= j
+              #print(paste0("ran here ", "item ",i," best ratio is ",best_ratio," for bin ", j))
+            }
+          }
+        }
+      }
+      # Step 2: If a valid bin was found, try to place the item there
+      if (!is.na(best_bin_index)) {
+        solution <- place_item(bin_space[[best_bin_index]], item_type[i,])
+        if(solution$items$Packed == TRUE) {
+          #print("ran here")
+          item_type$Packed[i]=solution$items$Packed
+          item_type$Rotation[i]=solution$items$Rotated
+          item_type$red_cap[i]= sum(bin_space[[best_bin_index]]$space == 0)
+          item_type$assigned_bin[i] <- best_bin_index
+          bin_space[[best_bin_index]]$space<- bin_space[[best_bin_index]]$space + solution$space
+
+        }
+        #print(solution$packed)
+      }
+
+      # Step 3: If no suitable bin found, open a new one with lowest Cost
+      if (is.null(solution$items$Packed)) {
+        
+        assign_temp<- ac_func2(new_bin_selection,item_type[i,])
+        temp_cost<-which(assign_temp != 0)[1]
+        best_choice_index <- temp_cost
+        #print(best_choice_index)
+        if (!is.na(temp_cost)){
+          new_length<- length(bin_space) + 1
+          bin_space[[new_length]]<- create_bin2(bins_matrix[temp_cost,])
+          solution <- place_item(bin_space[[new_length]],item_type[i,])
+          if (solution$items$Packed== TRUE) {
+            
+            item_type$Packed[i]=solution$items$Packed
+            item_type$Rotation[i]=solution$items$Rotated
+            item_type$red_cap[i]= sum(bin_space[[new_length]]$space == 0)
+            item_type$assigned_bin[i] <- new_length
+            bin_space[[new_length]]$space<- bin_space[[new_length]]$space + solution$space
+            #print(paste0("Packed Item ", i, " in bin ",new_length))
+          }
+        }
+      }
+    }
+  }
+  finish<- Sys.time()
+  total<- finish- start
+  costs <- sapply(bin_space, function(bin) {return(bin$cost)})
+  obj <- sum(costs)
+  
+  return(list(all_bins= bin_space, all_items= item_type, time=total,distinct_bins=n_distinct(item_type$assigned_bin) ,obj= obj))}
+
+
+```
+
+```{r Heuristic Algorithm 3}
+
+HS_3<- function(bins_matrix, item_type){
+  
+  new_bin_selection<-list()
+  for (i in 1: nrow(bins_matrix)){
+    new_bin_selection[[i]]<- create_bin2(bins_matrix[i,])
+  }
+  bin_space<- list()
+  start<-  Sys.time()
+  for (i in 1:nrow(item_type)) 
+  {
+    item_volume <- item_type$width[i] * item_type$height[i]
+    #print(item_volume)
+    while (item_type$Packed[i] == FALSE){
+      best_ratio <- Inf
+      best_bin_index <- NA
+      best_choice_index <- NA
+      assign_temp<- matrix()
+      ratio<- Inf
+      solution<- list()
+      # Step 1: Evaluate all open bins
+      if (length(bin_space)>0){
+        for(j in 1:length(bin_space))
+        {
+          residual_capacity <- sum(bin_space[[j]]$space == 0)
+          assignment_cost<- ac_func(bin_space, item_type[i,])
+          a_ij <- assignment_cost[,j]
+          if (residual_capacity >= item_volume && a_ij!= 0) {
+            ratio <- a_ij / (residual_capacity-item_volume + 1e-10)#avoid divby 0
+            if (ratio < best_ratio) {
+              best_ratio=ratio
+              best_bin_index= j
+            }
+          }
+        }
+      }
+      # Step 2: If a valid bin was found, try to place the item there
+      if (!is.na(best_bin_index)) {
+        solution <- place_item(bin_space[[best_bin_index]], item_type[i,])
+        if(solution$items$Packed == TRUE) {
+          
+          item_type$Packed[i]=solution$items$Packed
+          item_type$Rotation[i]=solution$items$Rotated
+          item_type$assigned_bin[i] <- best_bin_index
+          item_type$red_cap[i]= sum(bin_space[[best_bin_index]]$space == 0)
+          bin_space[[best_bin_index]]$space<- bin_space[[best_bin_index]]$space + solution$space
+        }
+
+      }
+      # Step 3: If no suitable bin found, open a new one with lowest Assignment Cost
+      if (is.null(solution$items$Packed)) {
+        
+        #print("came in here")
+        lowest_ac <- -Inf
+        temp_cost<- -Inf
+        assign_temp<- ac_func(new_bin_selection,item_type[i,])
+        #print(assign_temp)
+        #print(assign_temp)
+        for (j in 1:length(new_bin_selection)){
+          
+          temp_cost<- assign_temp[,j]
+          if(temp_cost>lowest_ac){
+            lowest_ac <- temp_cost
+            best_choice_index <- j
+          }
+        }
+      }
+      if (!is.na(best_choice_index)){
+        new_length<- length(bin_space) + 1
+        bin_space[[new_length]]<- create_bin2(bins_matrix[best_choice_index,])
+        solution <- place_item(bin_space[[new_length]],item_type[i,])
+        if (solution$items$Packed== TRUE) {
+          
+          item_type$Packed[i]=solution$items$Packed
+          item_type$Rotation[i]=solution$items$Rotated
+          item_type$assigned_bin[i] <- new_length
+          item_type$red_cap[i]= sum(bin_space[[new_length]]$space == 0)
+          bin_space[[new_length]]$space<- bin_space[[new_length]]$space + solution$space
+        }
+      }
+    }
+  }
+  finish<- Sys.time()
+  total<- finish- start
+  costs <- sapply(bin_space, function(bin) {return(bin$cost)})
+  obj <- sum(costs)
+  
+  return(list(all_bins= bin_space, all_items= item_type, time=total,distinct_bins=n_distinct(item_type$assigned_bin) ,obj= obj))}
+```
+
+```{r Heuristic Algorithm 3 Online}
+
+HS3_OL<-function(bins_matrix, item_type){
+  
+  item_type <- item_type[order(item_type$height*item_type$width,decreasing = TRUE), ] # ordering so bigger items to go in first
+  rownames(item_type) <- NULL 
+  
+  new_bin_selection<-list()
+  for (i in 1: nrow(bins_matrix)){
+    new_bin_selection[[i]]<- create_bin2(bins_matrix[i,])
+  }
+  bin_space<- list()
+  start<-  Sys.time()
+  for (i in 1:nrow(item_type)) 
+  {
+    item_volume <- item_type$width[i] * item_type$height[i]
+    #print(item_volume)
+    while (item_type$Packed[i] == FALSE){
+      best_ratio <- Inf
+      best_bin_index <- NA
+      best_choice_index <- NA
+      assign_temp<- matrix()
+      ratio<- Inf
+      solution<- list()
+      # Step 1: Evaluate all open bins
+      if (length(bin_space)>0){
+        for(j in 1:length(bin_space))
+        {
+          residual_capacity <- sum(bin_space[[j]]$space == 0)
+          assignment_cost<- ac_func(bin_space, item_type[i,])
+          #print((paste0("RC of Bin ",j, " :    ",residual_capacity)))
+          a_ij <- assignment_cost[,j]
+          if (residual_capacity >= item_volume && a_ij!= 0) {
+            ratio <- a_ij / (residual_capacity-item_volume + 1e-10)#avoid divby 0
+            #print(ratio)
+            if (ratio < best_ratio) {
+              best_ratio=ratio
+              best_bin_index= j
+              #print(best_ratio)
+            }
+          }
+        }
+      }
+      #print(best_bin_index)
+      # Step 2: If a valid bin was found, try to place the item there
+      if (!is.na(best_bin_index)) {
+        solution <- place_item(bin_space[[best_bin_index]], item_type[i,])
+        if(solution$items$Packed == TRUE) {
+          
+          item_type$Packed[i]=solution$items$Packed
+          item_type$Rotation[i]=solution$items$Rotated
+          item_type$assigned_bin[i] <- best_bin_index
+          item_type$red_cap[i]= sum(bin_space[[best_bin_index]]$space == 0)
+          bin_space[[best_bin_index]]$space<- bin_space[[best_bin_index]]$space + solution$space
+          #print("ran here too")
+          #print(paste0("Packed Item ", i, " in bin ",best_bin_index))
+        }
+        
+        #print(solution$packed)
+      }
+      #print(solution$items$Packed)
+      # Step 3: If no suitable bin found, open a new one with lowest Assignment Cost
+      if (is.null(solution$items$Packed)) {
+        
+        #print("came in here")
+        lowest_ac <- -Inf
+        temp_cost<- -Inf
+        assign_temp<- ac_func(new_bin_selection,item_type[i,])
+        #print(assign_temp)
+        #print(assign_temp)
+        for (j in 1:length(new_bin_selection)){
+          
+          temp_cost<- assign_temp[,j]
+          if(temp_cost>lowest_ac){
+            lowest_ac <- temp_cost
+            best_choice_index <- j
+          }
+        }
+      }
+      
+      #print(paste0("new best bin is ",best_choice_index))
+      if (!is.na(best_choice_index)){
+        new_length<- length(bin_space) + 1
+        bin_space[[new_length]]<- create_bin2(bins_matrix[best_choice_index,])
+        solution <- place_item(bin_space[[new_length]],item_type[i,])
+        if (solution$items$Packed== TRUE) {
+          
+          item_type$Packed[i]=solution$items$Packed
+          item_type$Rotation[i]=solution$items$Rotated
+          item_type$assigned_bin[i] <- new_length
+          item_type$red_cap[i]= sum(bin_space[[new_length]]$space == 0)
+          bin_space[[new_length]]$space<- bin_space[[new_length]]$space + solution$space
+          #print(paste0("Packed Item ", i, " in bin ",new_length))
+        }
+      }
+    }
+  }
+  finish<- Sys.time()
+  total<- finish- start
+  costs <- sapply(bin_space, function(bin) {return(bin$cost)})
+  obj <- sum(costs)
+  
+  return(list(all_bins= bin_space, all_items= item_type, time=total,distinct_bins=n_distinct(item_type$assigned_bin) ,obj= obj))}
+
+
+
+```
+
+```{r Benchmark Data Extraction}
+
+all_train_HS1<- list()
+all_train_HS2<- list()
+all_train_HS3<- list()
+
+folder_path<- "C:\Users\thabo\OneDrive\Documents\school\2DVSBPP"
+
+files <- list.files(path = folder_path, full.names = TRUE)
+
+for (file in files){
+
+  lines <- readLines(file)
+  header <- as.numeric(strsplit(lines[1], " ")[[1]])
+  num_pieces <- header[1]
+  num_bins <- header[2]
+
+   # Extract bin data
+   bin_lines <- lines[2:(1 + num_bins)]
+   bin_data <- do.call(rbind, lapply(bin_lines, function(line) {
+      as.numeric(strsplit(trimws(line), "\\s+")[[1]])
+    }))
+  colnames(bin_data) <- c("width", "height", "Dim_z", "cost")
+  bench_bins_df <- as.data.frame(bin_data)
+  bench_bins_df$capacity<- bench_bins_df$width * bench_bins_df$height
+  # Add bin Type label
+  bench_bins_df$type <- 1:nrow(bench_bins_df)
+
+  # Extract item data
+  item_lines <- lines[(2 + num_bins):length(lines)]
+  item_data <- do.call(rbind, lapply(item_lines, function(line) {
+    as.numeric(strsplit(trimws(line), "\\s+")[[1]])
+    }))
+  colnames(item_data) <- c("Id", "width", "height", "Dim_z")
+  bench_items_df <- as.data.frame(item_data)
+  # Add additional attributes
+  bench_items_df$Rotation <- FALSE
+  bench_items_df$Packed <- FALSE
+  bench_items_df$assigned_bin <- 0
+  bench_items_df$red_cap <- 0
+  bench_items_df$type<-0
+
+Result<- HS_1(bins_matrix = bench_bins_df, item_type = bench_items_df)
+Result2<- HS_2(bins_matrix = bench_bins_df, item_type = bench_items_df)
+Result3<- HS_3(bins_matrix = bench_bins_df, item_type = bench_items_df)
+
+all_results_HS1[[basename(file)]]<- Result 
+all_results_HS2[[basename(file)]]<- Result2
+all_results_HS3[[basename(file)]]<- Result3
+}
+
+training_table <- function(result) {
+  # Flatten bins into a dataframe with unique IDs
+  bins_df <- do.call(rbind, lapply(seq_along(result$all_bins), function(i) {
+    bin <- result$all_bins[[i]]
+    data.frame(
+      assigned_bin = i,              # unique bin ID
+      bin_type     = bin$type,       # keep type for reference
+      bin_width    = bin$width,
+      bin_height   = bin$height
+    )
+  }))
+  
+  # Items already have assigned_bin (matches i, not type)
+  items <- result$all_items[, c("width", "height", "assigned_bin","Rotation", "red_cap")] #Id", 
+  
+  # Join on assigned_bin
+  merged <- merge(items, bins_df, by = "assigned_bin", all.x = TRUE)
+  
+  # Rename columns for clarity
+  colnames(merged) <- c("assigned_bin", "item_width", "item_height","Rotation", "red_cap",
+                        "bin_type", "bin_width", "bin_height") #"item_id",
+  
+  return(merged)
+}
+
+
+ml_training_data_HS1<- list()
+ml_training_data_HS2<- list()
+ml_training_data_HS3<- list()
+
+for (i in 1:length(all_results_HS21)){
+ml_training_data_HS1[[i]]<- training_table(all_results_HS1[[i]])}
+
+for (i in 1:length(all_results_HS2)){
+ml_training_data_HS2[[i]]<- training_table(all_results_HS2[[i]])}
+
+for (i in 1:length(all_results_HS2)){
+ml_training_data_HS3[[i]]<- training_table(all_results_HS3[[i]])}
+```
+
+```{Machine Learning Modelling}
+#scale data before it is used
+scale_per_column <- function(df, cols, new_min = 0, new_max = 1) {
+  df_scaled <- df
+  for(col in cols) {
+    old_min <- min(df[[col]])
+    old_max <- max(df[[col]])
+    
+    # Avoid divide-by-zero (if column constant)
+    if(old_min == old_max){
+      df_scaled[[col]] <- new_min
+    } else {
+      df_scaled[[col]] <- (df[[col]] - old_min) / (old_max - old_min)
+    }
+  }
+  return(df_scaled)
+}
+
+
+normalised_data1<- list()
+normalised_data2<- list()
+normalised_data3<- list()
+# Loop over all instances in ml_training_data for all 3 heuristics
+for (k in seq_along(ml_training_data_HS1)) #ml_training_data_HS2 #ml_training_data_HS3
+  {
+  
+  input_data <- ml_training_data2[[k]]
+  input_data$bin_type <- factor(input_data$bin_type)
+  
+  training_bins <- unique(input_data[, c("bin_type","bin_width","bin_height")])
+  
+  train_data <- data.frame()
+  
+  # Build (item, bin) combinations
+  for (i in 1:nrow(input_data)) {
+    item <- input_data[i, ]
+    for (j in 1:nrow(training_bins)) {
+      bin <- training_bins[j, ]
+      train_data <- rbind(train_data, data.frame(
+        item_id = item$item_id,
+        item_width = item$item_width,
+        item_height = item$item_height,
+        bin_width = bin$bin_width,
+        bin_height = bin$bin_height,
+        red_cap= item$red_cap,
+        fits = ifelse(item$bin_type == bin$bin_type, 1, 0),
+        file_id = k   # keep track of which file this came from
+      ))
+    }
+  }
+  Ml_test_data<-train_data
+  # Scale PER FILE, PER COLUMN (before adding to master dataset)
+  train_data <- scale_per_column(train_data,cols = c("item_width","item_height","bin_width","bin_height","red_cap"))
+  
+  # Handle imbalance: keep all positives, sample from the neegatives
+  pos <- train_data %>% filter(fits == 1)
+  neg <- train_data %>% filter(fits == 0)
+  neg_sample <- neg %>% sample_frac(0.35) 
+  
+  balanced_data <- bind_rows(pos, neg_sample)
+  
+  # Collect all normalized data into one big dataset
+  normalised_data1 <- bind_rows(normalised_data1, balanced_data)
+}
+
+``` 
+
+```{r Support Vector Machines}
+
+SVM_Training_data1<- normalised_data1
+SVM_Training_data2<- normalised_data2
+SVM_Training_data3<- normalised_data3
+
+
+SVM_Training_data1$fits<- as.factor(SVM_Training_data1$fits)
+SVM_Training_data2$fits<- as.factor(SVM_Training_data2$fits)
+SVM_Training_data3$fits<- as.factor(SVM_Training_data3$fits)
+
+
+SVM_Training_data1$fits<- factor(
+  SVM_Training_data1$fits,
+  levels = c(0, 1),
+  labels = c("No_Fit", "Fits")
+)
+SVM_Training_data2$fits<- factor(
+  SVM_Training_data2$fits,
+  levels = c(0, 1),
+  labels = c("No_Fit", "Fits")
+)
+SVM_Training_data3$fits<- factor(
+  SVM_Training_data3$fits,
+  levels = c(0, 1),
+  labels = c("No_Fit", "Fits")
+)
+
+train_index1<-createDataPartition(SVM_Training_data1$fits, p = 0.8, list = FALSE)
+train_index2<-createDataPartition(SVM_Training_data1$fits, p = 0.8, list = FALSE)
+train_index3<-createDataPartition(SVM_Training_data1$fits, p = 0.8, list = FALSE)
+
+new_train1<- SVM_Training_data1[train_index1,]
+new_train2<- SVM_Training_data2[train_index2,]
+new_train3<- SVM_Training_data3[train_index3,]
+
+new_train1<- data.frame(new_train1[, c("item_width","item_height","bin_width","bin_height","red_cap", "fits")])
+new_train2<- data.frame(new_train2[, c("item_width","item_height","bin_width","bin_height","red_cap", "fits")])
+new_train3<- data.frame(new_train3[, c("item_width","item_height","bin_width","bin_height","red_cap", "fits")])
+
+new_test1<- SVM_Training_data1[-train_index1,]
+new_test2<- SVM_Training_data2[-train_index2,]
+new_test3<- SVM_Training_data3[-train_index3,]
+
+new_test1<- data.frame(new_test1[, c("item_width","item_height","bin_width","bin_height","red_cap", "fits")])
+new_test2<- data.frame(new_test2[, c("item_width","item_height","bin_width","bin_height","red_cap", "fits")])
+new_test3<- data.frame(new_test3[, c("item_width","item_height","bin_width","bin_height","red_cap", "fits")])
+
+
+svm_grid <- expand.grid(
+  C     = c(0.25, 0.5, 1, 2, 4),
+  sigma = c(0.01, 0.05, 0.1)
+)
+
+
+svm_rbf <- train(
+  fits ~ .,
+  data = new_train1,
+  method = "svmRadial",
+  metric = "Accuracy",
+  tuneGrid= svm_grid,
+  trControl = trainControl(method = "cv", number = 5),
+  tuneLength = 10
+)
+
+svm_rbf_HS2 <- train(
+  fits ~ .,
+  data = new_train2,
+  method = "svmRadial",
+  metric = "Accuracy",
+  tuneGrid= svm_grid,
+  trControl = trainControl(method = "cv", number = 5),
+  tuneLength = 10
+)
+
+svm_rbf_HS3 <- train(
+  fits ~ .,
+  data = new_train3,
+  method = "svmRadial",
+  metric = "Accuracy",
+  tuneGrid= svm_grid,
+  trControl = trainControl(method = "cv", number = 5),
+  tuneLength = 10
+)
+
+
+pred_class <- predict(svm_rbf, new_test1)
+pred_prob  <- predict(svm_rbf,new_test1, type = "prob")
+confusionMatrix(pred_class, new_test1$fits)
+
+pred_class <- predict(svm_rbf_HS2, new_test2)
+pred_prob  <- predict(svm_rbf_HS2,new_test2, type = "prob")
+confusionMatrix(pred_class, new_test2$fits)
+
+pred_class <- predict(svm_rbf_HS3, new_test3)
+pred_prob  <- predict(svm_rbf_HS3,new_test3, type = "prob")
+confusionMatrix(pred_class, new_test3$fits)
+
+
+
+# Accuracy and Variable importance plots 
+plot(svm_rbf)
+plot(svm_rbf_HS2)
+plot(svm_rbf_HS3)
+varImp(svm_rbf, scale = TRUE)
+varImp(svm_rbf_HS2, scale = TRUE)
+varImp(svm_rbf_HS3, scale = TRUE)
+```
+
+```{r SVM-HA1}
+
+HS1_SVM<- function(bins_matrix, item_type){
+  
+  bin_space<- list()
+  start<-  Sys.time()
+  for (i in 1:nrow(item_type)) 
+  {
+    item_volume <- item_type$width[i] * item_type$height[i]
+    while (item_type$Packed[i] == FALSE){
+      best_ratio <- -Inf
+      best_bin_index <- NA
+      best_choice_index <- NA
+      ML_good_bins<- NULL
+      assign_temp<- matrix()
+      ratio<- -Inf
+      solution<- list()
+      ML_data<- data.frame()
+      if (length(bin_space)>0){
+        ML_data <- data.frame(
+          item_width  = rep((item_type$width[i]-1)/(10-1), length(bin_space)),
+          item_height = rep((item_type$height[i]-1)/(10-1), length(bin_space)),
+          bin_width   = sapply(bin_space, function(x) (x$width-5)/(10-5)),
+          bin_height  = sapply(bin_space, function(x) (x$height-5)/(10-5)),
+          red_cap     = sapply(bin_space, function(x) sum(x$space==0)/100)
+        )
+        pred_classes <- predict(svm_rbf,ML_data)
+        idx<- which(pred_classes=="Fits")
+        for(index in idx)
+        {
+          residual_capacity <- sum(bin_space[[index]]$space == 0)
+          assignment_cost<- ac_func(bin_space, item_type[i,])
+          a_ij <- assignment_cost[,index]
+          if (residual_capacity >= item_volume && a_ij!= 0) {
+            ratio <- a_ij / (residual_capacity-item_volume + 1e-10)#avoid divby 0
+            if (ratio > best_ratio) {
+              best_ratio=ratio
+              best_bin_index= index
+            }
+          }
+        }
+      }
+      # Step 2: If a valid bin was found, try to place the item there
+      if (!is.na(best_bin_index)) {
+        solution <- place_item(bin_space[[best_bin_index]], item_type[i,])
+        if(solution$items$Packed == TRUE) {
+          
+          item_type$Packed[i]=solution$items$Packed
+          item_type$Rotation[i]=solution$items$Rotated
+          item_type$assigned_bin[i] <- best_bin_index
+          item_type$red_cap[i]= sum(bin_space[[new_length]]$space == 0)
+          bin_space[[best_bin_index]]$space<- bin_space[[best_bin_index]]$space + solution$space
+        }
+      }
+      # Step 3: If no suitable bin found, open a new one with lowest Assignment Cost
+      if (is.null(solution$items$Packed)) {
+        lowest_ac <- -Inf
+        temp_cost<- -Inf
+        assign_temp<- ac_func(new_bin_selection,item_type[i,])
+        for (j in 1:length(new_bin_selection)){
+          
+          temp_cost<- assign_temp[,j]
+          if(temp_cost>lowest_ac){
+            lowest_ac <- temp_cost
+            best_choice_index <- j
+          }
+        }
+      }
+      if (!is.na(best_choice_index)){
+        new_length<- length(bin_space) + 1
+        bin_space[[new_length]]<- create_bin2(bins_matrix[best_choice_index,])
+        solution <- place_item(bin_space[[new_length]],item_type[i,])
+        if (solution$items$Packed== TRUE) {
+          
+          item_type$Packed[i]=solution$items$Packed
+          item_type$Rotation[i]=solution$items$Rotated
+          item_type$assigned_bin[i] <- new_length
+          item_type$red_cap[i]= sum(bin_space[[new_length]]$space == 0)
+          bin_space[[new_length]]$space<- bin_space[[new_length]]$space + solution$space
+        }
+      }
+    }
+    }
+  finish<- Sys.time()
+  total<- finish- start
+  costs <- sapply(bin_space, function(bin) {return(bin$cost)})
+  obj <- sum(costs)
+  
+  return(list(all_bins= bin_space, all_items= item_type, time=total,distinct_bins=n_distinct(item_type$assigned_bin) ,obj= obj))}
+
+```
+
+```{r SVM-HA2}
+
+HS2_SVM<- function(bins_matrix, item_type){
+  
+  bin_space<- list()
+  start<-  Sys.time()
+  for (i in 1:nrow(item_type)) 
+  {
+    item_volume <- item_type$width[i] * item_type$height[i]
+    while (item_type$Packed[i] == FALSE){
+      best_ratio <- Inf
+      best_bin_index <- NA
+      best_choice_index <- NA
+      ML_good_bins<- NULL
+      assign_temp<- matrix()
+      ratio<- Inf
+      temp_cost<-0
+      solution<- list()
+      ML_data<- data.frame()
+      if (length(bin_space)>0){
+        
+        ML_data <- data.frame(
+          item_width  = rep((item_type$width[i]-1)/(10-1), length(bin_space)),
+          item_height = rep((item_type$height[i]-1)/(10-1), length(bin_space)),
+          bin_width   = sapply(bin_space, function(x) (x$width-5)/(10-5)),
+          bin_height  = sapply(bin_space, function(x) (x$height-5)/(10-5)),
+          red_cap     = sapply(bin_space, function(x) sum(x$space==0)/100)
+        )
+        pred_classes <- predict(svm_rbf_HS2,ML_data)
+        idx<- which(pred_classes=="Fits")
+        for(index in idx)
+        {
+          residual_capacity <- sum(bin_space[[index]]$space == 0)
+          bin_cost<- ac_func2(bin_space,item_type[i,])
+          a_ij<- bin_cost[,index]
+          if (residual_capacity >= item_volume && a_ij!= 0) {
+            ratio <- a_ij / (residual_capacity-item_volume + 1e-10)#avoid divby 0
+            if (ratio < best_ratio) {
+              best_ratio=ratio
+              best_bin_index= index
+            }
+          }
+        }
+      }
+      # Step 2: If a valid bin was found, try to place the item there
+      if (!is.na(best_bin_index)) {
+        solution <- place_item(bin_space[[best_bin_index]], item_type[i,])
+        if(solution$items$Packed == TRUE) {
+          
+          item_type$Packed[i]=solution$items$Packed
+          item_type$Rotation[i]=solution$items$Rotated
+          item_type$assigned_bin[i] <- best_bin_index
+          item_type$red_cap[i]= sum(bin_space[[new_length]]$space == 0)
+          bin_space[[best_bin_index]]$space<- bin_space[[best_bin_index]]$space + solution$space
+        }
+      }
+      # Step 3: If no suitable bin found, open a new one with lowest Assignment Cost
+      if (is.null(solution$items$Packed)) {
+        
+        assign_temp<- ac_func2(new_bin_selection,item_type[i,])
+        temp_cost<-which(assign_temp != 0)[1]
+        best_choice_index <- temp_cost
+        if (!is.na(temp_cost)){
+          new_length<- length(bin_space) + 1
+          bin_space[[new_length]]<- create_bin2(bins_matrix[temp_cost,])
+          solution <- place_item(bin_space[[new_length]],item_type[i,])
+          if (solution$items$Packed== TRUE) {
+            
+            item_type$Packed[i]=solution$items$Packed
+            item_type$Rotation[i]=solution$items$Rotated
+            item_type$red_cap[i]= sum(bin_space[[new_length]]$space == 0)
+            item_type$assigned_bin[i] <- new_length
+            bin_space[[new_length]]$space<- bin_space[[new_length]]$space + solution$space
+        }
+      }
+    }
+    }
+  }
+  finish<- Sys.time()
+  total<- finish- start
+  costs <- sapply(bin_space, function(bin) {return(bin$cost)})
+  obj <- sum(costs)
+  
+  return(list(all_bins= bin_space, all_items= item_type, time=total,distinct_bins=n_distinct(item_type$assigned_bin) ,obj= obj))}
+
+
+
+```
+
+```{r SVM-HA3}
+
+HS3_SVM<- function(bins_matrix, item_type){
+  
+  bin_space<- list()
+  start<-  Sys.time()
+  for (i in 1:nrow(item_type)) 
+  {
+    item_volume <- item_type$width[i] * item_type$height[i]
+
+    while (item_type$Packed[i] == FALSE){
+      best_ratio <- Inf
+      best_bin_index <- NA
+      best_choice_index <- NA
+      ML_good_bins<- NULL
+      assign_temp<- matrix()
+      ratio<- Inf
+      solution<- list()
+      ML_data<- data.frame()
+      if (length(bin_space)>0){
+        ML_data <- data.frame(
+          item_width  = rep((item_type$width[i]-1)/(10-1), length(bin_space)),
+          item_height = rep((item_type$height[i]-1)/(10-1), length(bin_space)),
+          bin_width   = sapply(bin_space, function(x) (x$width-5)/(10-5)),
+          bin_height  = sapply(bin_space, function(x) (x$height-5)/(10-5)),
+          red_cap     = sapply(bin_space, function(x) sum(x$space==0)/100)
+        )
+        pred_classes <- predict(svm_rbf_HS3,ML_data)
+        idx<- which(pred_classes=="Fits")
+        for(index in idx)
+        {
+          residual_capacity <- sum(bin_space[[index]]$space == 0)
+          assignment_cost<- ac_func(bin_space, item_type[i,])
+          a_ij <- assignment_cost[,index]
+          if (residual_capacity >= item_volume && a_ij!= 0) {
+            ratio <- a_ij / (residual_capacity-item_volume + 1e-10)#avoid divby 0
+            if (ratio < best_ratio) {
+              best_ratio=ratio
+              best_bin_index= index
+            }
+          }
+        }
+      }
+      # Step 2: If a valid bin was found, try to place the item there
+      if (!is.na(best_bin_index)) {
+        solution <- place_item(bin_space[[best_bin_index]], item_type[i,])
+        if(solution$items$Packed == TRUE) {
+          
+          item_type$Packed[i]=solution$items$Packed
+          item_type$Rotation[i]=solution$items$Rotated
+          item_type$assigned_bin[i] <- best_bin_index
+          item_type$red_cap[i]= sum(bin_space[[new_length]]$space == 0)
+          bin_space[[best_bin_index]]$space<- bin_space[[best_bin_index]]$space + solution$space
+
+        }
+
+      }
+
+      if (is.null(solution$items$Packed)) {
+        lowest_ac <- -Inf
+        temp_cost<- -Inf
+        assign_temp<- ac_func(new_bin_selection,item_type[i,])
+        for (j in 1:length(new_bin_selection)){
+          
+          temp_cost<- assign_temp[,j]
+          if(temp_cost>lowest_ac){
+            lowest_ac <- temp_cost
+            best_choice_index <- j
+          }
+        }
+      }
+      if (!is.na(best_choice_index)){
+        new_length<- length(bin_space) + 1
+        bin_space[[new_length]]<- create_bin2(bins_matrix[best_choice_index,])
+        solution <- place_item(bin_space[[new_length]],item_type[i,])
+        if (solution$items$Packed== TRUE) {
+          
+          item_type$Packed[i]=solution$items$Packed
+          item_type$Rotation[i]=solution$items$Rotated
+          item_type$assigned_bin[i] <- new_length
+          item_type$red_cap[i]= sum(bin_space[[new_length]]$space == 0)
+          bin_space[[new_length]]$space<- bin_space[[new_length]]$space + solution$space
+        }
+      }
+    }
+  }
+  finish<- Sys.time()
+  total<- finish- start
+  costs <- sapply(bin_space, function(bin) {return(bin$cost)})
+  obj <- sum(costs)
+  
+  return(list(all_bins= bin_space, all_items= item_type, time=total,distinct_bins=n_distinct(item_type$assigned_bin) ,obj= obj))}
+```
+
+```{r Nueral Networks}
+
+# Neural network parameter grid
+nn_grid <- expand.grid(
+  size = c(1, 3, 5, 7, 9),   # number of hidden neurons
+  decay = c(0, 0.0001, 0.001, 0.01)  # weight decay (regularization)
+)
+
+nn_model <-  caret::train(
+  fits ~ .,
+  data = new_train1,
+  method = "nnet",
+  tuneGrid= nn_grid,
+  trControl = trainControl(method = "cv", number = 5,classProbs = TRUE),
+  trace = FALSE,
+  maxit = 300
+)
+
+nn_model_HS2 <-  caret::train(
+  fits ~ .,
+  data = new_train2,
+  method = "nnet",
+  tuneGrid= nn_grid,
+  trControl = trainControl(method = "cv", number = 5,classProbs = TRUE),
+  trace = FALSE,
+  maxit = 300
+)
+
+nn_model_HS3 <-  caret::train(
+  fits ~ .,
+  data = new_train3,
+  method = "nnet",
+  tuneGrid= nn_grid,
+  trControl = trainControl(method = "cv", number = 5,classProbs = TRUE),
+  trace = FALSE,
+  maxit = 300
+)
+
+
+pred_class <- predict(nn_model, new_test1)
+pred_prob  <- predict(nn_model,new_test1, type = "prob")
+confusionMatrix(pred_class, new_test1$fits)
+
+pred_class <- predict(nn_model_HS2, new_test2)
+pred_prob  <- predict(nn_model_HS2,new_test2, type = "prob")
+confusionMatrix(pred_class, new_test2$fits)
+
+pred_class <- predict(nn_model_HS3, new_test3)
+pred_prob  <- predict(nn_model_HS3,new_test3, type = "prob")
+confusionMatrix(pred_class, new_test3$fits)
+
+
+
+# Accuracy and Variable importance plots 
+plot(nn_model)
+plot(nn_model_HS2)
+plot(nn_model_HS3)
+varImp(nn_model, scale = TRUE)
+varImp(nn_model_HS2, scale = TRUE)
+varImp(nn_model_HS3, scale = TRUE)
+
+```
+
+```{r NN-HA1}
+HS1_NN<- function(bins_matrix, item_type){
+  
+  bin_space<- list()
+  start<-  Sys.time()
+  for (i in 1:nrow(item_type)) 
+  {
+    item_volume <- item_type$width[i] * item_type$height[i]
+    #print(assignment_cost)
+    while (item_type$Packed[i] == FALSE){
+      best_ratio <- -Inf
+      best_bin_index <- NA
+      best_choice_index <- NA
+      ML_good_bins<- NULL
+      assign_temp<- matrix()
+      ratio<- -Inf
+      solution<- list()
+      ML_data<- data.frame()
+      if (length(bin_space)>0){
+        ML_data <- data.frame(
+          item_width  = rep((item_type$width[i]-1)/(10-1), length(bin_space)),
+          item_height = rep((item_type$height[i]-1)/(10-1), length(bin_space)),
+          bin_width   = sapply(bin_space, function(x) (x$width-5)/(10-5)),
+          bin_height  = sapply(bin_space, function(x) (x$height-5)/(10-5)),
+          red_cap     = sapply(bin_space, function(x) sum(x$space==0)/100)
+        )
+        pred_classes <- predict(nn_model,ML_data, type = "prob")
+        pred_thres<- ifelse(pred_classes$No_Fit >= 0.60,"No_Fit","Fits")
+        pred_thres <- factor(pred_thres,levels = c("No_Fit", "Fits"))
+        idx<- which(pred_thres=="Fits") # get index for variables which were assisgned fits
+        for(index in idx)
+        {
+          residual_capacity <- sum(bin_space[[index]]$space == 0)
+          assignment_cost<- ac_func(bin_space, item_type[i,])
+          a_ij <- assignment_cost[,index]
+          if (residual_capacity >= item_volume && a_ij!= 0) {
+            ratio <- a_ij / (residual_capacity-item_volume + 1e-10)#avoid divby 0
+            if (ratio > best_ratio) {
+              best_ratio=ratio
+              best_bin_index= index
+            }
+          }
+        }
+      }
+      # Step 2: If a valid bin was found, try to place the item there
+      if (!is.na(best_bin_index)) {
+        solution <- place_item(bin_space[[best_bin_index]], item_type[i,])
+        if(solution$items$Packed == TRUE) {
+          
+          item_type$Packed[i]=solution$items$Packed
+          item_type$Rotation[i]=solution$items$Rotated
+          item_type$assigned_bin[i] <- best_bin_index
+          item_type$red_cap[i]= sum(bin_space[[new_length]]$space == 0)
+          bin_space[[best_bin_index]]$space<- bin_space[[best_bin_index]]$space + solution$space
+        }
+      }
+      # Step 3: If no suitable bin found, open a new one with lowest Assignment Cost
+      if (is.null(solution$items$Packed)) {
+        lowest_ac <- -Inf
+        temp_cost<- -Inf
+        assign_temp<- ac_func(new_bin_selection,item_type[i,])
+        for (j in 1:length(new_bin_selection)){
+          
+          temp_cost<- assign_temp[,j]
+          if(temp_cost>lowest_ac){
+            lowest_ac <- temp_cost
+            best_choice_index <- j
+          }
+        }
+      }
+      if (!is.na(best_choice_index)){
+        new_length<- length(bin_space) + 1
+        bin_space[[new_length]]<- create_bin2(bins_matrix[best_choice_index,])
+        solution <- place_item(bin_space[[new_length]],item_type[i,])
+        if (solution$items$Packed== TRUE) {
+          
+          item_type$Packed[i]=solution$items$Packed
+          item_type$Rotation[i]=solution$items$Rotated
+          item_type$assigned_bin[i] <- new_length
+          item_type$red_cap[i]= sum(bin_space[[new_length]]$space == 0)
+          bin_space[[new_length]]$space<- bin_space[[new_length]]$space + solution$space
+        }
+      }
+    }
+  }
+  finish<- Sys.time()
+  total<- finish- start
+  costs <- sapply(bin_space, function(bin) {return(bin$cost)})
+  obj <- sum(costs)
+  
+  return(list(all_bins= bin_space, all_items= item_type, time=total,distinct_bins=n_distinct(item_type$assigned_bin) ,obj= obj))}
+
+
+
+```
+
+```{r NN-HA2}
+HS2_NN<- function(bins_matrix, item_type){
+  
+  bin_space<- list()
+  start<-  Sys.time()
+  for (i in 1:nrow(item_type)) 
+  {
+    item_volume <- item_type$width[i] * item_type$height[i]
+    while (item_type$Packed[i] == FALSE){
+      best_ratio <- Inf
+      best_bin_index <- NA
+      best_choice_index <- NA
+      ML_good_bins<- NULL
+      assign_temp<- matrix()
+      ratio<- Inf
+      temp_cost<-0
+      solution<- list()
+      ML_data<- data.frame()
+      if (length(bin_space)>0){
+        ML_data <- data.frame(
+          item_width  = rep((item_type$width[i]-1)/(10-1), length(bin_space)),
+          item_height = rep((item_type$height[i]-1)/(10-1), length(bin_space)),
+          bin_width   = sapply(bin_space, function(x) (x$width-5)/(10-5)),
+          bin_height  = sapply(bin_space, function(x) (x$height-5)/(10-5)),
+          red_cap     = sapply(bin_space, function(x) sum(x$space==0)/100)
+        )
+        pred_classes <- predict(nn_model,ML_data, type = "prob")
+        pred_thres<- ifelse(pred_classes$No_Fit >= 0.55,"No_Fit","Fits")
+        pred_thres <- factor(pred_thres,levels = c("No_Fit", "Fits"))
+        idx<- which(pred_thres=="Fits") # get index for variables which were assisgned fits
+        for(index in idx)
+        {
+          residual_capacity <- sum(bin_space[[index]]$space == 0)
+          bin_cost<- ac_func2(bin_space,item_type[i,])
+          a_ij<- bin_cost[,index]
+          if (residual_capacity >= item_volume && a_ij!= 0) {
+            ratio <- a_ij / (residual_capacity-item_volume + 1e-10)#avoid divby 0
+            if (ratio < best_ratio) {
+              best_ratio=ratio
+              best_bin_index= index
+            }
+          }
+        }
+      }
+      # Step 2: If a valid bin was found, try to place the item there
+      if (!is.na(best_bin_index)) {
+        solution <- place_item(bin_space[[best_bin_index]], item_type[i,])
+        if(solution$items$Packed == TRUE) {
+          
+          item_type$Packed[i]=solution$items$Packed
+          item_type$Rotation[i]=solution$items$Rotated
+          item_type$assigned_bin[i] <- best_bin_index
+          item_type$red_cap[i]= sum(bin_space[[new_length]]$space == 0)
+          bin_space[[best_bin_index]]$space<- bin_space[[best_bin_index]]$space + solution$space
+        }
+      }
+      # Step 3: If no suitable bin found, open a new one with lowest Assignment Cost
+      if (is.null(solution$items$Packed)) {
+        
+        assign_temp<- ac_func2(new_bin_selection,item_type[i,])
+        temp_cost<-which(assign_temp != 0)[1]
+        best_choice_index <- temp_cost
+        if (!is.na(temp_cost)){
+          new_length<- length(bin_space) + 1
+          bin_space[[new_length]]<- create_bin2(bins_matrix[temp_cost,])
+          solution <- place_item(bin_space[[new_length]],item_type[i,])
+          if (solution$items$Packed== TRUE) {
+            
+            item_type$Packed[i]=solution$items$Packed
+            item_type$Rotation[i]=solution$items$Rotated
+            item_type$red_cap[i]= sum(bin_space[[new_length]]$space == 0)
+            item_type$assigned_bin[i] <- new_length
+            bin_space[[new_length]]$space<- bin_space[[new_length]]$space + solution$space
+          }
+        }
+      }
+    }
+  }
+  finish<- Sys.time()
+  total<- finish- start
+  costs <- sapply(bin_space, function(bin) {return(bin$cost)})
+  obj <- sum(costs)
+  
+  return(list(all_bins= bin_space, all_items= item_type, time=total,distinct_bins=n_distinct(item_type$assigned_bin) ,obj= obj))}
+
+```
+
+```{r NN-HA3}
+HS3_NN<- function(bins_matrix, item_type){
+  
+  bin_space<- list()
+  start<-  Sys.time()
+  for (i in 1:nrow(item_type)) 
+  {
+    item_volume <- item_type$width[i] * item_type$height[i]
+    while (item_type$Packed[i] == FALSE){
+      best_ratio <- Inf
+      best_bin_index <- NA
+      best_choice_index <- NA
+      ML_good_bins<- NULL
+      assign_temp<- matrix()
+      ratio<- Inf
+      solution<- list()
+      ML_data<- data.frame()
+      if (length(bin_space)>0){
+        ML_data <- data.frame(
+          item_width  = rep((item_type$width[i]-1)/(10-1), length(bin_space)),
+          item_height = rep((item_type$height[i]-1)/(10-1), length(bin_space)),
+          bin_width   = sapply(bin_space, function(x) (x$width-5)/(10-5)),
+          bin_height  = sapply(bin_space, function(x) (x$height-5)/(10-5)),
+          red_cap     = sapply(bin_space, function(x) sum(x$space==0)/100)
+        )
+        pred_classes <- predict(nn_model_HS3,ML_data, type = "prob")
+        pred_thres<- ifelse(pred_classes$No_Fit >= 0.65,"No_Fit","Fits")
+        pred_thres <- factor(pred_thres,levels = c("No_Fit", "Fits"))
+        idx<- which(pred_thres=="Fits") # get index for variables which were assisgned fits
+        for(index in idx)
+        {
+          residual_capacity <- sum(bin_space[[index]]$space == 0)
+          assignment_cost<- ac_func(bin_space, item_type[i,])
+          a_ij <- assignment_cost[,index]
+          if (residual_capacity >= item_volume && a_ij!= 0) {
+            ratio <- a_ij / (residual_capacity-item_volume + 1e-10)#avoid divby 0
+            if (ratio < best_ratio) {
+              best_ratio=ratio
+              best_bin_index= index
+            }
+          }
+        }
+      }
+      # Step 2: If a valid bin was found, try to place the item there
+      if (!is.na(best_bin_index)) {
+        solution <- place_item(bin_space[[best_bin_index]], item_type[i,])
+        if(solution$items$Packed == TRUE) {
+          
+          item_type$Packed[i]=solution$items$Packed
+          item_type$Rotation[i]=solution$items$Rotated
+          item_type$assigned_bin[i] <- best_bin_index
+          item_type$red_cap[i]= sum(bin_space[[new_length]]$space == 0)
+          bin_space[[best_bin_index]]$space<- bin_space[[best_bin_index]]$space + solution$space
+        }
+      }
+      # Step 3: If no suitable bin found, open a new one with lowest Assignment Cost
+      if (is.null(solution$items$Packed)) {
+        lowest_ac <- -Inf
+        temp_cost<- -Inf
+        assign_temp<- ac_func(new_bin_selection,item_type[i,])
+        for (j in 1:length(new_bin_selection)){
+          temp_cost<- assign_temp[,j]
+          if(temp_cost>lowest_ac){
+            lowest_ac <- temp_cost
+            best_choice_index <- j
+          }
+        }
+      }
+      if (!is.na(best_choice_index)){
+        new_length<- length(bin_space) + 1
+        bin_space[[new_length]]<- create_bin2(bins_matrix[best_choice_index,])
+        solution <- place_item(bin_space[[new_length]],item_type[i,])
+        if (solution$items$Packed== TRUE) {
+          
+          item_type$Packed[i]=solution$items$Packed
+          item_type$Rotation[i]=solution$items$Rotated
+          item_type$assigned_bin[i] <- new_length
+          item_type$red_cap[i]= sum(bin_space[[new_length]]$space == 0)
+          bin_space[[new_length]]$space<- bin_space[[new_length]]$space + solution$space
+        }
+      }
+    }
+  }
+  finish<- Sys.time()
+  total<- finish- start
+  costs <- sapply(bin_space, function(bin) {return(bin$cost)})
+  obj <- sum(costs)
+  
+  return(list(all_bins= bin_space, all_items= item_type, time=total,distinct_bins=n_distinct(item_type$assigned_bin) ,obj= obj))}
+
+```
+
+```{r Heuristic Computational Results}
+# NOTE: Replace < {HEURISTIC NAME}_{INSTANCE TYPE}_20 > with the appropriate instance-specific variable
+
+HS1_type1_20<-list()
+HS1_type1_20_lb<-list()
+HS1_type1_20_Gaps<-list()
+HS1_type1_20_ol<-list()
+HS1_type1_20_Gaps_OL<-list()
+
+
+for (i in 1:10){
+  HS1_type1_20[[i]]<- HS_1(bins_df, item_type1_20)
+  HS1_type1_20_ol[[i]]<- HS1_OL(bins_df, item_type1_20)
+  HS1_type1_20_lb[[i]]<- ip_area_cover_bound(HS1_type1_20[[i]]$all_items,new_bin_selection)
+  HS1_type1_20_Gaps[[i]]<- ((HS1_type1_20[[i]]$obj-HS1_type1_20_lb[[i]])/HS1_type1_20_lb[[i]])*100
+  print(paste0("Run no. ", i ," at " ,Sys.time()))
+}
+
+HS1_type1_40<-list()
+HS1_type1_40_lb<-list()
+HS1_type1_40_Gaps<-list()
+HS1_type1_40_ol<-list()
+HS1_type1_40_Gaps_OL<-list()
+
+
+
+for (i in 1:10){
+  HS1_type1_40[[i]]<- HS_1(bins_df, item_type1_40)
+  HS1_type1_40_ol[[i]]<- HS1_OL(bins_df, item_type1_40)
+  HS1_type1_40_lb[[i]]<- ip_area_cover_bound(HS1_type1_40[[i]]$all_items,new_bin_selection)
+  HS1_type1_40_Gaps[[i]]<- ((HS1_type1_40[[i]]$obj-HS1_type1_40_lb[[i]])/HS1_type1_40_lb[[i]])*100
+  print(paste0("Run no. ", i ," at " ,Sys.time()))
+}
+
+HS1_type1_80<-list()
+HS1_type1_80_lb<-list()
+HS1_type1_80_Gaps<-list()
+HS1_type1_80_ol<-list()
+HS1_type1_80_Gaps_OL<-list()
+
+
+
+for (i in 1:10){
+  HS1_type1_80[[i]]<- HS_1(bins_df, item_type1_80)
+  HS1_type1_80_ol[[i]]<- HS1_OL(bins_df, item_type1_80)
+  HS1_type1_80_lb[[i]]<- ip_area_cover_bound(HS1_type1_80[[i]]$all_items,new_bin_selection)
+  HS1_type1_80_Gaps[[i]]<- ((HS1_type1_80[[i]]$obj-HS1_type1_80_lb[[i]])/HS1_type1_80_lb[[i]])*100
+  print(paste0("Run no. ", i ," at " ,Sys.time()))
+}
+
+HS1_type1_100<-list()
+HS1_type1_100_lb<-list()
+HS1_type1_100_Gaps<-list()
+HS1_type1_100_ol<-list()
+HS1_type1_100_Gaps_OL<-list()
+
+
+
+for (i in 8:10){
+  HS1_type1_100[[i]]<- HS_1(bins_df, item_type1_100)
+  HS1_type1_100_ol[[i]]<- HS1_OL(bins_df, item_type1_100)
+  HS1_type1_100_lb[[i]]<- ip_area_cover_bound(HS1_type1_100[[i]]$all_items,new_bin_selection)
+  HS1_type1_100_Gaps[[i]]<- ((HS1_type1_100[[i]]$obj-HS1_type1_100_lb[[i]])/HS1_type1_100_lb[[i]])*100
+  print(paste0("Run no. ", i ," at " ,Sys.time()))
+}
+
+HS1_type1_150<-list()
+HS1_type1_150_lb<-list()
+HS1_type1_150_Gaps<-list()
+HS1_type1_150_ol<-list()
+HS1_type1_150_Gaps_OL<-list()
+
+
+for (i in 1:5){
+  HS1_type1_150[[i]]<- HS_1(bins_df, item_type1_150)
+  HS1_type1_150_ol[[i]]<- HS1_OL(bins_df, item_type1_150)
+  HS1_type1_150_lb[[i]]<- ip_area_cover_bound(HS1_type1_150[[i]]$all_items,new_bin_selection)
+  HS1_type1_150_Gaps[[i]]<- ((HS1_type1_150[[i]]$obj-HS1_type1_150_lb[[i]])/HS1_type1_150_lb[[i]])*100
+  print(paste0("Run no. ", i ," at " ,Sys.time()))
+}
+
+
+HS1_type1_200<-list()
+HS1_type1_200_lb<-list()
+HS1_type1_200_Gaps<-list()
+HS1_type1_200_ol<-list()
+HS1_type1_200_Gaps_OL<-list()
+
+
+for (i in 1:5){
+  HS1_type1_200[[i]]<- HS_1(bins_df, item_type1_100)
+  HS1_type1_200_ol[[i]]<- HS1_OL(bins_df, item_type1_200)
+  HS1_type1_200_lb[[i]]<- ip_area_cover_bound(HS1_type1_200[[i]]$all_items,new_bin_selection)
+  HS1_type1_200_Gaps[[i]]<- ((HS1_type1_200[[i]]$obj-HS1_type1_200_lb[[i]])/HS1_type1_200_lb[[i]])*100
+  print(paste0("Run no. ", i ," at " ,Sys.time()))
+}
+
+```
+
+```{r SVM Computational Results}
+# NOTE: Replace < {HEURISTIC NAME}_{INSTANCE TYPE}_SVM_20 > with the appropriate instance-specific variable
+HS1_type1_SVM_20<-list()
+HS1_type1_SVM_20_lb<-list()
+HS1_type1_SVM_20_Gaps<-list()
+HS1_type1_SVM_20_ol<-list()
+HS1_type1_SVM_20_Gaps_OL<-list()
+
+
+for (i in 1:10){
+  HS1_type1_SVM_20[[i]]<- HS_1(bins_df, item_type1_SVM_20)
+  HS1_type1_SVM_20_ol[[i]]<- HS1_OL(bins_df, item_type1_SVM_20)
+  HS1_type1_SVM_20_lb[[i]]<- ip_area_cover_bound(HS1_type1_SVM_20[[i]]$all_items,new_bin_selection)
+  HS1_type1_SVM_20_Gaps[[i]]<- ((HS1_type1_SVM_20[[i]]$obj-HS1_type1_SVM_20_lb[[i]])/HS1_type1_SVM_20_lb[[i]])*100
+  print(paste0("Run no. ", i ," at " ,Sys.time()))
+}
+
+HS1_type1_SVM_40<-list()
+HS1_type1_SVM_40_lb<-list()
+HS1_type1_SVM_40_Gaps<-list()
+HS1_type1_SVM_40_ol<-list()
+HS1_type1_SVM_40_Gaps_OL<-list()
+
+
+
+for (i in 1:10){
+  HS1_type1_SVM_40[[i]]<- HS_1(bins_df, item_type1_SVM_40)
+  HS1_type1_SVM_40_ol[[i]]<- HS1_OL(bins_df, item_type1_SVM_40)
+  HS1_type1_SVM_40_lb[[i]]<- ip_area_cover_bound(HS1_type1_SVM_40[[i]]$all_items,new_bin_selection)
+  HS1_type1_SVM_40_Gaps[[i]]<- ((HS1_type1_SVM_40[[i]]$obj-HS1_type1_SVM_40_lb[[i]])/HS1_type1_SVM_40_lb[[i]])*100
+  print(paste0("Run no. ", i ," at " ,Sys.time()))
+}
+
+HS1_type1_SVM_80<-list()
+HS1_type1_SVM_80_lb<-list()
+HS1_type1_SVM_80_Gaps<-list()
+HS1_type1_SVM_80_ol<-list()
+HS1_type1_SVM_80_Gaps_OL<-list()
+
+
+
+for (i in 1:10){
+  HS1_type1_SVM_80[[i]]<- HS_1(bins_df, item_type1_SVM_80)
+  HS1_type1_SVM_80_ol[[i]]<- HS1_OL(bins_df, item_type1_SVM_80)
+  HS1_type1_SVM_80_lb[[i]]<- ip_area_cover_bound(HS1_type1_SVM_80[[i]]$all_items,new_bin_selection)
+  HS1_type1_SVM_80_Gaps[[i]]<- ((HS1_type1_SVM_80[[i]]$obj-HS1_type1_SVM_80_lb[[i]])/HS1_type1_SVM_80_lb[[i]])*100
+  print(paste0("Run no. ", i ," at " ,Sys.time()))
+}
+
+HS1_type1_SVM_100<-list()
+HS1_type1_SVM_100_lb<-list()
+HS1_type1_SVM_100_Gaps<-list()
+HS1_type1_SVM_100_ol<-list()
+HS1_type1_SVM_100_Gaps_OL<-list()
+
+
+
+for (i in 8:10){
+  HS1_type1_SVM_100[[i]]<- HS_1(bins_df, item_type1_SVM_100)
+  HS1_type1_SVM_100_ol[[i]]<- HS1_OL(bins_df, item_type1_SVM_100)
+  HS1_type1_SVM_100_lb[[i]]<- ip_area_cover_bound(HS1_type1_SVM_100[[i]]$all_items,new_bin_selection)
+  HS1_type1_SVM_100_Gaps[[i]]<- ((HS1_type1_SVM_100[[i]]$obj-HS1_type1_SVM_100_lb[[i]])/HS1_type1_SVM_100_lb[[i]])*100
+  print(paste0("Run no. ", i ," at " ,Sys.time()))
+}
+
+HS1_type1_SVM_150<-list()
+HS1_type1_SVM_150_lb<-list()
+HS1_type1_SVM_150_Gaps<-list()
+HS1_type1_SVM_150_ol<-list()
+HS1_type1_SVM_150_Gaps_OL<-list()
+
+n_items1 <- 150 
+
+for (i in 1:5){
+  HS1_type1_SVM_150[[i]]<- HS_1(bins_df, item_type1_SVM_150)
+  HS1_type1_SVM_150_ol[[i]]<- HS1_OL(bins_df, item_type1_SVM_150)
+  HS1_type1_SVM_150_lb[[i]]<- ip_area_cover_bound(HS1_type1_SVM_150[[i]]$all_items,new_bin_selection)
+  HS1_type1_SVM_150_Gaps[[i]]<- ((HS1_type1_SVM_150[[i]]$obj-HS1_type1_SVM_150_lb[[i]])/HS1_type1_SVM_150_lb[[i]])*100
+  print(paste0("Run no. ", i ," at " ,Sys.time()))
+}
+
+
+HS1_type1_SVM_200<-list()
+HS1_type1_SVM_200_lb<-list()
+HS1_type1_SVM_200_Gaps<-list()
+HS1_type1_SVM_200_ol<-list()
+HS1_type1_SVM_200_Gaps_OL<-list()
+
+n_items1 <- 200 
+
+for (i in 1:5){
+  HS1_type1_SVM_200[[i]]<- HS_1(bins_df, item_type1_SVM_100)
+  HS1_type1_SVM_200_ol[[i]]<- HS1_OL(bins_df, item_type1_SVM_200)
+  HS1_type1_SVM_200_lb[[i]]<- ip_area_cover_bound(HS1_type1_SVM_200[[i]]$all_items,new_bin_selection)
+  HS1_type1_SVM_200_Gaps[[i]]<- ((HS1_type1_SVM_200[[i]]$obj-HS1_type1_SVM_200_lb[[i]])/HS1_type1_SVM_200_lb[[i]])*100
+  print(paste0("Run no. ", i ," at " ,Sys.time()))
+}
+
+```
+
+```{r NN Computational Results}
+# NOTE: Replace < {HEURISTIC NAME}_{INSTANCE TYPE}_NN_20 > with the appropriate instance-specific variable
+
+HS1_type1_NN_20<-list()
+HS1_type1_NN_20_lb<-list()
+HS1_type1_NN_20_Gaps<-list()
+HS1_type1_NN_20_ol<-list()
+HS1_type1_NN_20_Gaps_OL<-list()
+
+
+for (i in 1:10){
+  HS1_type1_NN_20[[i]]<- HS_1(bins_df, item_type1_NN_20)
+  HS1_type1_NN_20_ol[[i]]<- HS1_OL(bins_df, item_type1_NN_20)
+  HS1_type1_NN_20_lb[[i]]<- ip_area_cover_bound(HS1_type1_NN_20[[i]]$all_items,new_bin_selection)
+  HS1_type1_NN_20_Gaps[[i]]<- ((HS1_type1_NN_20[[i]]$obj-HS1_type1_NN_20_lb[[i]])/HS1_type1_NN_20_lb[[i]])*100
+  print(paste0("Run no. ", i ," at " ,Sys.time()))
+}
+
+HS1_type1_NN_40<-list()
+HS1_type1_NN_40_lb<-list()
+HS1_type1_NN_40_Gaps<-list()
+HS1_type1_NN_40_ol<-list()
+HS1_type1_NN_40_Gaps_OL<-list()
+
+
+
+for (i in 1:10){
+  HS1_type1_NN_40[[i]]<- HS_1(bins_df, item_type1_NN_40)
+  HS1_type1_NN_40_ol[[i]]<- HS1_OL(bins_df, item_type1_NN_40)
+  HS1_type1_NN_40_lb[[i]]<- ip_area_cover_bound(HS1_type1_NN_40[[i]]$all_items,new_bin_selection)
+  HS1_type1_NN_40_Gaps[[i]]<- ((HS1_type1_NN_40[[i]]$obj-HS1_type1_NN_40_lb[[i]])/HS1_type1_NN_40_lb[[i]])*100
+  print(paste0("Run no. ", i ," at " ,Sys.time()))
+}
+
+HS1_type1_NN_80<-list()
+HS1_type1_NN_80_lb<-list()
+HS1_type1_NN_80_Gaps<-list()
+HS1_type1_NN_80_ol<-list()
+HS1_type1_NN_80_Gaps_OL<-list()
+
+
+
+for (i in 1:10){
+  HS1_type1_NN_80[[i]]<- HS_1(bins_df, item_type1_NN_80)
+  HS1_type1_NN_80_ol[[i]]<- HS1_OL(bins_df, item_type1_NN_80)
+  HS1_type1_NN_80_lb[[i]]<- ip_area_cover_bound(HS1_type1_NN_80[[i]]$all_items,new_bin_selection)
+  HS1_type1_NN_80_Gaps[[i]]<- ((HS1_type1_NN_80[[i]]$obj-HS1_type1_NN_80_lb[[i]])/HS1_type1_NN_80_lb[[i]])*100
+  print(paste0("Run no. ", i ," at " ,Sys.time()))
+}
+
+HS1_type1_NN_100<-list()
+HS1_type1_NN_100_lb<-list()
+HS1_type1_NN_100_Gaps<-list()
+HS1_type1_NN_100_ol<-list()
+HS1_type1_NN_100_Gaps_OL<-list()
+
+
+
+for (i in 8:10){
+  HS1_type1_NN_100[[i]]<- HS_1(bins_df, item_type1_NN_100)
+  HS1_type1_NN_100_ol[[i]]<- HS1_OL(bins_df, item_type1_NN_100)
+  HS1_type1_NN_100_lb[[i]]<- ip_area_cover_bound(HS1_type1_NN_100[[i]]$all_items,new_bin_selection)
+  HS1_type1_NN_100_Gaps[[i]]<- ((HS1_type1_NN_100[[i]]$obj-HS1_type1_NN_100_lb[[i]])/HS1_type1_NN_100_lb[[i]])*100
+  print(paste0("Run no. ", i ," at " ,Sys.time()))
+}
+
+HS1_type1_NN_150<-list()
+HS1_type1_NN_150_lb<-list()
+HS1_type1_NN_150_Gaps<-list()
+HS1_type1_NN_150_ol<-list()
+HS1_type1_NN_150_Gaps_OL<-list()
+
+n_items1 <- 150 
+
+for (i in 1:5){
+  HS1_type1_NN_150[[i]]<- HS_1(bins_df, item_type1_NN_150)
+  HS1_type1_NN_150_ol[[i]]<- HS1_OL(bins_df, item_type1_NN_150)
+  HS1_type1_NN_150_lb[[i]]<- ip_area_cover_bound(HS1_type1_NN_150[[i]]$all_items,new_bin_selection)
+  HS1_type1_NN_150_Gaps[[i]]<- ((HS1_type1_NN_150[[i]]$obj-HS1_type1_NN_150_lb[[i]])/HS1_type1_NN_150_lb[[i]])*100
+  print(paste0("Run no. ", i ," at " ,Sys.time()))
+}
+
+
+HS1_type1_NN_200<-list()
+HS1_type1_NN_200_lb<-list()
+HS1_type1_NN_200_Gaps<-list()
+HS1_type1_NN_200_ol<-list()
+HS1_type1_NN_200_Gaps_OL<-list()
+
+n_items1 <- 200 
+
+for (i in 1:5){
+  HS1_type1_NN_200[[i]]<- HS_1(bins_df, item_type1_NN_100)
+  HS1_type1_NN_200_ol[[i]]<- HS1_OL(bins_df, item_type1_NN_200)
+  HS1_type1_NN_200_lb[[i]]<- ip_area_cover_bound(HS1_type1_NN_200[[i]]$all_items,new_bin_selection)
+  HS1_type1_NN_200_Gaps[[i]]<- ((HS1_type1_NN_200[[i]]$obj-HS1_type1_NN_200_lb[[i]])/HS1_type1_NN_200_lb[[i]])*100
+  print(paste0("Run no. ", i ," at " ,Sys.time()))
+}
+
+```
+
+```{r Results Visualisations}
+# NOTE: Replace < {HEURISTIC NAME}_{INSTANCE TYPE}_20 > with the appropriate instance-specific variable
+
+
+compute_packing_efficiency <- function(result_list) {
+  
+  bins <- result_list$all_bins
+  
+  efficiencies <- sapply(bins, function(bin) {
+    
+    space_matrix <- bin$space
+    
+    total_cells <- length(space_matrix)
+    empty_cells <- sum(space_matrix == 0)
+    
+    efficiency <- 1 - (empty_cells / total_cells)
+    return(efficiency)
+  })
+  
+  return(efficiencies)
+}
+
+mean(sapply(lapply(HS1_type2_NN_200, compute_packing_efficiency),mean))
+
+
+
+
+gap_data <- data.frame(
+  gap = c(
+    unlist(HS1_type2_NN_20_Gaps),
+    unlist(HS1_type2_NN_40_Gaps),
+    unlist(HS1_type2_NN_80_Gaps),
+    unlist(HS1_type2_NN_100_Gaps),
+    unlist(HS1_type2_NN_150_Gaps),
+    unlist(HS1_type2_NN_200_Gaps)
+  ),
+  scenario = factor(rep(
+    c("20 Items", "40 Items", "80 Items", "100 Items", "150 Items","200 Items"),
+    times = c(
+      length(HS1_type2_NN_20_Gaps),
+      length(HS1_type2_NN_40_Gaps),
+      length(HS1_type2_NN_80_Gaps),
+      length(HS1_type2_NN_100_Gaps),
+      length(HS1_type2_NN_150_Gaps),
+      length(HS1_type2_NN_200_Gaps)
+    )
+  ))
+)
+
+gap_data$scenario <- factor(
+  gap_data$scenario,
+  levels = c("20 Items", "40 Items", "80 Items", 
+             "100 Items", "150 Items", "200 Items")
+)
+
+ggplot(gap_data, aes(x = scenario, y = gap)) +
+  geom_boxplot(fill = "skyblue") +
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 10)) +
+  labs(
+    title = "Item Type 2 NN Gap Statistic With Lower Bound",
+    x = "Scenario",
+    y = "Gap (%)"
+  ) +
+  theme_minimal(base_size = 14)
+
+
+extract_metrics <- function(results, label) {
+  data.frame(
+    scenario = label,
+    items = sapply(results, function(x) nrow(x$all_items)),
+    bins  = sapply(results, function(x) length(x$all_bins))
+  ) |>
+    dplyr::mutate(bins_per_item = items / bins)
+}
+
+
+
+bin_stats <- bind_rows(
+  extract_metrics(HS1_type2_NN_20,  "20 Items"),
+  extract_metrics(HS1_type2_NN_40,  "40 Items"),
+  extract_metrics(HS1_type2_NN_80,  "80 Items"),
+  extract_metrics(HS1_type2_NN_100, "100 Items"),
+  extract_metrics(HS1_type2_NN_150, "150 Items"),
+  extract_metrics(HS1_type2_NN_200, "200 Items")
+)
+
+avg_bins_per_item <- bin_stats %>%
+  group_by(scenario) %>%
+  summarise(mean_bpi = mean(bins_per_item))
+
+avg_bins_per_item$scenario <- factor(
+  avg_bins_per_item$scenario,
+  levels = c("20 Items","40 Items","80 Items","100 Items","150 Items","200 Items")
+)
+
+ggplot(avg_bins_per_item, aes(x = scenario, y = mean_bpi, group = 1)) +
+  geom_line(color="#69b3a2",size = 1.2) +
+   scale_y_continuous(breaks = scales::pretty_breaks(n = 10)) +
+  labs(
+    title = "Item Type 2 NN Average Number of Items Per Bin",
+    x = "Scenario",
+    y = "Items/Bins"
+  ) +
+  theme_minimal(base_size = 14)
+
+```
+
